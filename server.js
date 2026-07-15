@@ -1,22 +1,53 @@
 const http = require('http');
 const url = require('url');
 const crypto = require('crypto');
+const https = require('https');
 
 const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
-const APP_SID = process.env.TWILIO_APP_SID || '';
 const CALLER_NUMBER = process.env.TWILIO_CALLER_NUMBER || '';
+const MY_NUMBER = process.env.MY_PAKISTAN_NUMBER || '';
 
-function base64url(str) {
-  return Buffer.from(str).toString('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
+function twilioRequest(path, data) {
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams(data).toString();
+    const options = {
+      hostname: 'api.twilio.com',
+      path: path,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(body),
+        'Authorization': 'Basic ' + Buffer.from(ACCOUNT_SID + ':' + AUTH_TOKEN).toString('base64')
+      }
+    };
+    const req = https.request(options, (res) => {
+      let d = '';
+      res.on('data', (chunk) => d += chunk);
+      res.on('end', () => resolve(JSON.parse(d)));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
 }
 
-function generateToken(identity) {
-  const now = Math.floor(Date.now()/1000);
-  const header = base64url(JSON.stringify({cty:'twilio-fpa;v=1',typ:'JWT',alg:'HS256'}));
-  const payload = base64url(JSON.stringify({jti:ACCOUNT_SID+'-'+now,iss:ACCOUNT_SID,sub:ACCOUNT_SID,exp:now+3600,grants:{identity:identity,voice:{incoming:{allow:false},outgoing:{application_sid:APP_SID}}}}));
-  const sig = crypto.createHmac('sha256',AUTH_TOKEN).update(header+'.'+payload).digest('base64').replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
-  return header+'.'+payload+'.'+sig;
+function twilioGet(path) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.twilio.com',
+      path: path,
+      method: 'GET',
+      headers: {
+        'Authorization': 'Basic ' + Buffer.from(ACCOUNT_SID + ':' + AUTH_TOKEN).toString('base64')
+      }
+    };
+    https.request(options, (res) => {
+      let d = '';
+      res.on('data', (chunk) => d += chunk);
+      res.on('end', () => resolve(JSON.parse(d)));
+    }).on('error', reject).end();
+  });
 }
 
 const DIALER_HTML = `<!DOCTYPE html>
@@ -25,7 +56,6 @@ const DIALER_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>A.Lord Dialer</title>
-<script src="https://media.twiliocdn.com/sdk/js/client/v1.13/twilio.min.js"><\/script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
@@ -33,11 +63,7 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
 .logo{font-size:16px;font-weight:700;letter-spacing:2px}
 .logo span{color:#c9a84c}
 .pill{display:flex;align-items:center;gap:7px;background:#161616;border:1px solid #1e1e1e;border-radius:20px;padding:5px 12px;font-size:11px;color:#888}
-.dot{width:7px;height:7px;border-radius:50%;background:#444;transition:all .3s}
-.dot.ok{background:#3dba6e;box-shadow:0 0 6px #3dba6e}
-.dot.ring{background:#c9a84c;box-shadow:0 0 6px #c9a84c;animation:blink 1s infinite}
-.dot.err{background:#e03e3e}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.dot{width:7px;height:7px;border-radius:50%;background:#3dba6e;box-shadow:0 0 6px #3dba6e}
 .tabs{display:flex;background:#101010;border-bottom:1px solid #1e1e1e}
 .tab{flex:1;padding:11px;text-align:center;font-size:12px;color:#444;cursor:pointer;border-bottom:2px solid transparent}
 .tab.on{color:#c9a84c;border-bottom-color:#c9a84c}
@@ -51,13 +77,19 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
 .field textarea{resize:vertical;min-height:60px}
 .btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:8px}
 .gold{background:#c9a84c;color:#080808}
-.green{background:#0f2a1a;border:1px solid #3dba6e;color:#3dba6e}
+.green{background:#0f2a1a;border:1px solid #3dba6e;color:#3dba6e;font-size:15px;padding:16px}
 .red{background:#2a0f0f;border:1px solid #e03e3e;color:#e03e3e}
 .ghost{background:transparent;border:1px solid #1e1e1e;color:#888}
 .ndisplay{background:#080808;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;margin-bottom:14px;min-height:60px;display:flex;align-items:center;justify-content:center;flex-direction:column}
 .num{font-size:24px;letter-spacing:3px;color:#fff;font-weight:300}
 .hint{font-size:12px;color:#333}
 .cname{font-size:12px;color:#c9a84c;margin-bottom:3px}
+.status-box{background:#0a1a0a;border:1px solid #1e3e1e;border-radius:10px;padding:14px;margin-bottom:14px;text-align:center}
+.s-title{font-size:11px;color:#444;margin-bottom:6px}
+.s-status{font-size:14px;font-weight:600;color:#3dba6e}
+.status-box.calling{background:#1a1200;border-color:#3e3e1e}
+.status-box.calling .s-status{color:#c9a84c;animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
 .timer{text-align:center;font-size:26px;font-weight:300;color:#3dba6e;letter-spacing:3px;padding:8px;display:none}
 .timer.on{display:block}
 .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
@@ -82,10 +114,10 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
 .scard{background:#161616;border:1px solid #1e1e1e;border-radius:10px;padding:14px;text-align:center}
 .snum{font-size:26px;font-weight:300;color:#c9a84c}
 .slbl{font-size:10px;color:#444;margin-top:4px;letter-spacing:1px;text-transform:uppercase}
-.ci{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #1e1e1e;cursor:pointer}
+.ci{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #1e1e1e}
 .ci:last-child{border:none}
 .av{width:36px;height:36px;border-radius:50%;background:#161616;border:1px solid #1e1e1e;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#c9a84c;flex-shrink:0}
-.cinfo{flex:1;min-width:0}
+.cinfo{flex:1}
 .cname2{font-size:13px;font-weight:500}
 .cmeta{font-size:11px;color:#888;margin-top:1px}
 .cph{font-size:11px;color:#444}
@@ -104,22 +136,27 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
 .ti{background:#2a0f0f;color:#e03e3e}
 .hnote{font-size:11px;color:#444;margin-top:3px;font-style:italic}
 .empty{text-align:center;padding:36px 20px;color:#444;font-size:12px}
+.info-box{background:#0a0a1a;border:1px solid #1e1e3e;border-radius:8px;padding:12px;font-size:11px;color:#6688cc;margin-bottom:14px;line-height:1.8}
 </style>
 </head>
 <body>
 <div class="topbar">
   <div class="logo">A.<span>LORD</span></div>
-  <div class="pill"><div class="dot" id="dot"></div><span id="stxt">Connecting...</span></div>
+  <div class="pill"><div class="dot"></div><span>Ready</span></div>
 </div>
 <div class="tabs">
   <div class="tab on" onclick="pg('dial',this)">📞 Dial</div>
   <div class="tab" onclick="pg('contacts',this)">👥 Contacts</div>
   <div class="tab" onclick="pg('history',this)">📋 History</div>
-  <div class="tab" onclick="pg('setup',this)">⚙️ Setup</div>
 </div>
 <div class="page on" id="page-dial">
-  <div class="cbar" style="font-size:11px;"><span style="color:#444">Calling from</span><span style="color:#c9a84c;font-weight:600" id="callerDisp">Loading...</span></div>
-  <div class="ndisplay" id="ndisp"><div class="hint">Enter number or pick a contact</div></div>
+  <div class="info-box">📱 Enter US number → Click Call → Your Pakistani phone rings → Pick up → You're connected to the US business</div>
+  <div class="cbar"><span style="color:#444">US businesses see this number</span><span style="color:#c9a84c;font-weight:600">+14704503795</span></div>
+  <div class="ndisplay" id="ndisp"><div class="hint">Enter US business number</div></div>
+  <div class="status-box" id="statusBox">
+    <div class="s-title">STATUS</div>
+    <div class="s-status" id="statusTxt">Ready to dial</div>
+  </div>
   <div class="timer" id="timer">00:00</div>
   <div class="keypad">
     <div class="key" onclick="pk('1')"><span class="d">1</span></div>
@@ -136,15 +173,15 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
     <div class="key" onclick="dk()" style="color:#888;font-size:17px">⌫</div>
   </div>
   <div class="cactions">
-    <button class="btn green" onclick="mcall()">📞 Call</button>
-    <button class="btn red" id="endBtn" onclick="ecall()" disabled>✕ End</button>
+    <button class="btn green" id="callBtn" onclick="mcall()">📞 Call</button>
+    <button class="btn red" id="endBtn" onclick="ecall()" disabled>✕ End Call</button>
   </div>
   <div class="outcomes" id="outcomes">
     <div class="olabel">How did the call go?</div>
     <div class="ogrid">
       <button class="ob an" onclick="sout('answered')">✅ Answered</button>
       <button class="ob na" onclick="sout('no-answer')">📵 No Answer</button>
-      <button class="ob cb" onclick="sout('callback')">🔄 Callback</button>
+      class="ob cb" onclick="sout('callback')">🔄 Callback</button>
       <button class="ob ni" onclick="sout('not-interested')">❌ Not Interested</button>
     </div>
   </div>
@@ -156,7 +193,7 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
 <div class="page" id="page-contacts">
   <div class="card">
     <div class="ctitle">Add Contact</div>
-    <div class="field"><label>Name</label><input id="cN" placeholder="John Smith"/></div>
+    <div class="field"><label>Name</label><input id="cN" placeholder="John Smith - Atlanta Plumbers"/></div>
     <div class="field"><label>Phone</label><input id="cP" type="tel" placeholder="+14045551234"/></div>
     <div class="field"><label>Business Type</label>
       <select id="cT"><option value="">Select...</option><option>Plumber</option><option>HVAC</option><option>Dental Clinic</option><option>Salon</option><option>Barber</option><option>Auto Repair</option><option>Roofing</option><option>Other</option></select>
@@ -176,64 +213,46 @@ body{background:#080808;color:#e8e8e8;font-family:sans-serif;min-height:100vh}
   <div class="card"><div class="ctitle">Call History</div><div id="hlist"><div class="empty">No calls yet.</div></div></div>
   <button class="btn ghost" onclick="clrH()">Clear History</button>
 </div>
-<div class="page" id="page-setup">
-  <div class="card"><div class="ctitle">Connection Status</div><div id="connSt" style="font-size:12px;color:#888">Connecting...</div></div>
-  <div class="card"><div class="ctitle">Caller ID</div><div style="font-size:13px;color:#c9a84c">+14704503795 (Atlanta, GA)</div></div>
-</div>
 <script>
 var SERVER=window.location.origin;
-var device=null,curCall=null,dialNum='',curCName='',callStart=null,callDur=0,timerInt=null,curOut=null,pendLog=null;
-window.onload=function(){rContacts();rHistory();connect()};
-function st(txt,state){document.getElementById('stxt').textContent=txt;document.getElementById('dot').className='dot '+(state||'')}
+var dialNum='',curCName='',callDur=0,timerInt=null,curOut=null,pendLog=null,callSid=null,pollInt=null;
+window.onload=function(){rContacts();rHistory()};
+function st(txt,state){document.getElementById('statusTxt').textContent=txt;var b=document.getElementById('statusBox');b.className='status-box'+(state?' '+state:'')}
 function pg(id,el){document.querySelectorAll('.page').forEach(function(p){p.classList.remove('on')});document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('on')});document.getElementById('page-'+id).classList.add('on');el.classList.add('on')}
 function gd(k){try{return JSON.parse(localStorage.getItem(k))||[]}catch(e){return[]}}
 function sd(k,v){localStorage.setItem(k,JSON.stringify(v))}
-function connect(){
-  st('Connecting...','ring');
-  fetch(SERVER+'/token?identity=ansaar')
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(!d.token)throw new Error('No token');
-      document.getElementById('callerDisp').textContent=d.callerNumber||'+14704503795';
-      device=new Twilio.Device(d.token,{codecPreferences:['opus','pcmu'],enableRingingState:true,debug:false});
-      device.on('ready',function(){st('Ready to call','ok');document.getElementById('connSt').textContent='Connected successfully!'});
-      device.on('error',function(e){st('Error','err');document.getElementById('connSt').textContent='Error: '+e.message});
-      device.on('disconnect',function(){onEnd()});
-    })
-    .catch(function(e){st('Failed','err');document.getElementById('connSt').textContent='Failed: '+e.message});
-}
 function pk(k){dialNum+=k;ud()}
 function dk(){dialNum=dialNum.slice(0,-1);if(!dialNum)curCName='';ud()}
-function ud(){
-  var d=document.getElementById('ndisp');
-  if(!dialNum){d.innerHTML='<div class="hint">Enter number or pick a contact</div>';return}
-  var n=curCName?'<div class="cname">'+curCName+'</div>':'';
-  d.innerHTML=n+'<div class="num">'+dialNum+'</div>';
-}
+function ud(){var d=document.getElementById('ndisp');if(!dialNum){d.innerHTML='<div class="hint">Enter US business number</div>';return}var n=curCName?'<div class="cname">'+curCName+'</div>':'';d.innerHTML=n+'<div class="num">'+dialNum+'</div>'}
 function mcall(){
-  if(!device){alert('Not connected');return}
-  if(!dialNum||dialNum.length<7){alert('Enter a valid number');return}
-  var num=dialNum;
-  if(num.indexOf('+')<0)num='+1'+num;
-  st('Calling '+num+'...','ring');
-  curCall=device.connect({To:num});
-  curOut=null;
-  pendLog={number:num,name:curCName,start:new Date()};
+  if(!dialNum||dialNum.length<7){alert('Enter a valid US number');return}
+  var num=dialNum;if(num.indexOf('+')<0)num='+1'+num;
+  st('Initiating call...','calling');
+  document.getElementById('callBtn').disabled=true;
   document.getElementById('endBtn').disabled=false;
   document.getElementById('outcomes').classList.remove('on');
   document.getElementById('cnotes').classList.remove('on');
-  curCall.on('accept',function(){st('On call','ring');startT()});
-  curCall.on('disconnect',function(){onEnd()});
-  curCall.on('reject',function(){onEnd()});
+  fetch(SERVER+'/call?to='+encodeURIComponent(num))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.error){st('Error: '+d.error,'');document.getElementById('callBtn').disabled=false;document.getElementById('endBtn').disabled=true;return}
+      callSid=d.callSid;pendLog={number:num,name:curCName,start:new Date()};
+      st('Your phone is ringing — pick up!','calling');
+      startT();
+      pollInt=setInterval(pollStatus,3000);
+    })
+    .catch(function(e){st('Failed: '+e.message,'');document.getElementById('callBtn').disabled=false;document.getElementById('endBtn').disabled=true});
 }
-function ecall(){if(curCall)curCall.disconnect();if(device)device.disconnectAll();onEnd()}
-function onEnd(){
-  stopT();st('Ready to call','ok');
-  document.getElementById('endBtn').disabled=true;
-  if(pendLog){document.getElementById('outcomes').classList.add('on');document.getElementById('cnotes').classList.add('on');document.getElementById('noteInput').value=''}
-  curCall=null;
+function pollStatus(){
+  if(!callSid)return;
+  fetch(SERVER+'/status?sid='+callSid).then(function(r){return r.json()}).then(function(d){
+    if(d.status==='in-progress')st('On call with US business ✅','calling');
+    else if(d.status==='completed'||d.status==='failed'||d.status==='busy'||d.status==='no-answer'){clearInterval(pollInt);onEnd()}
+  });
 }
-function startT(){callStart=Date.now();callDur=0;document.getElementById('timer').classList.add('on');timerInt=setInterval(function(){callDur=Math.floor((Date.now()-callStart)/1000);document.getElementById('timer').textContent=ft(callDur)},1000)}
+function ecall(){if(callSid)fetch(SERVER+'/hangup?sid='+callSid);clearInterval(pollInt);onEnd()}
+function onEnd(){stopT();st('Call ended','');document.getElementById('callBtn').disabled=false;document.getElementById('endBtn').disabled=true;callSid=null;if(pendLog){document.getElementById('outcomes').classList.add('on');document.getElementById('cnotes').classList.add('on');document.getElementById('noteInput').value=''}}
+function startT(){callDur=0;document.getElementById('timer').classList.add('on');timerInt=setInterval(function(){callDur++;document.getElementById('timer').textContent=ft(callDur)},1000)}
 function stopT(){clearInterval(timerInt);document.getElementById('timer').classList.remove('on');document.getElementById('timer').textContent='00:00'}
 function ft(s){return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function sout(o){curOut=o;document.querySelectorAll('.ob').forEach(function(b){b.style.opacity='.4'});event.currentTarget.style.opacity='1'}
@@ -243,6 +262,7 @@ function savelog(){
   h.unshift({id:Date.now(),number:pendLog.number,name:pendLog.name||pendLog.number,time:new Date().toLocaleString(),duration:callDur,outcome:curOut||'no-answer',note:document.getElementById('noteInput').value.trim()});
   sd('alord_h',h);rHistory();
   pendLog=null;curOut=null;dialNum='';curCName='';callDur=0;ud();
+  st('Ready to dial','');
   document.getElementById('outcomes').classList.remove('on');
   document.getElementById('cnotes').classList.remove('on');
   document.querySelectorAll('.ob').forEach(function(b){b.style.opacity='1'});
@@ -270,11 +290,11 @@ function rHistory(){
   var l=document.getElementById('hlist');
   if(!h.length){l.innerHTML='<div class="empty">No calls yet.</div>';return}
   var tc={answered:'ta','no-answer':'tn',callback:'tc','not-interested':'ti'};
-  var tl={answered:'Answered','no-answer':'No Answer',callback:'Callback','not-interested':'Not Interested'};
-  l.innerHTML=h.map(function(x){return '<div class="hi"><div class="htop"><div class="hn">'+x.name+'</div><div class="ht">'+x.time+'</div></div><div class="hmeta"><span class="tag '+(tc[x.outcome]||'tn')+'">'+(tl[x.outcome]||x.outcome)+'</span>'+(x.duration?'<span>'+ft(x.duration)+'</span>':'')+'</div>'+(x.note?'<div class="hnote">'+x.note+'</div>':'')+'</div>'}).join('');
+  var tl={answered:'✅ Answered','no-answer':'📵 No Answer',callback:'🔄 Callback','not-interested':'❌ Not Interested'};
+  l.innerHTML=h.map(function(x){return '<div class="hi"><div class="htop"><div class="hn">'+x.name+'</div><div class="ht">'+x.time+'</div></div><div class="hmeta"><span class="tag '+(tc[x.outcome]||'tn')+'\">'+(tl[x.outcome]||x.outcome)+'</span>'+(x.duration?'<span>⏱ '+ft(x.duration)+'</span>':'')+'</div>'+(x.note?'<div class="hnote">'+x.note+'</div>':'')+'</div>'}).join('');
 }
 function clrH(){if(!confirm('Clear all history?'))return;sd('alord_h',[]);rHistory()}
-<\/script>
+</script>
 </body>
 </html>`;
 
@@ -283,33 +303,19 @@ const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
-  const p = url.parse(req.url, true);
-  if (p.pathname === '/token') {
-    try {
-      const token = generateToken(p.query.identity || 'ansaar');
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ token, callerNumber: CALLER_NUMBER }));
-    } catch(e) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
-    }
-    return;
-  }
-  if (p.pathname === '/voice') {
-    let body = '';
-    req.on('data', d => body += d);
-    req.on('end', () => {
-      const params = new URLSearchParams(body);
-      const to = params.get('To') || p.query.To || '';
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Dial callerId="${CALLER_NUMBER}" timeout="30"><Number>${to}</Number></Dial></Response>`;
-      res.writeHead(200, { 'Content-Type': 'text/xml' });
-      res.end(twiml);
-    });
-    return;
-  }
-  res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(DIALER_HTML);
-});
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('Server running on port ' + PORT));
+  const p = url.parse(req.url, true);
+
+  if (p.pathname === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(DIALER_HTML);
+    return;
+  }
+
+  if (p.pathname === '/call') {
+    const to = p.query.to;
+    if (!to) { res.writeHead(400); res.end(JSON.stringify({ error: 'Missing number' })); return; }
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Connecting your call now.</Say><Dial callerId="' + CALLER_NUMBER + '" timeout="30"><Number>' + to + '</Number></Dial></Response>';
+    twilioRequest('/2010-04-01/Accounts/' + ACCOUNT_SID + '/Calls.json', {
+      To: MY_NUMBER,
+      From: CALLER_NUMBE
